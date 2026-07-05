@@ -1,19 +1,78 @@
-import pyodbc
 import pandas as pd
+import os
+from dotenv import load_dotenv
 
+load_dotenv()
+
+# Try pyodbc first (Windows), fall back to pymssql (Linux/Cloud)
+try:
+    import pyodbc
+    USING_PYODBC = True
+except ImportError:
+    USING_PYODBC = False
+    try:
+        import pymssql
+    except ImportError:
+        raise ImportError("Neither pyodbc nor pymssql could be imported. Install one of these packages.")
 
 # ==================================================
 # SQL SERVER CONNECTION
 # ==================================================
 
 def get_connection():
-    return pyodbc.connect(
-        "DRIVER={ODBC Driver 18 for SQL Server};"
-        "SERVER=localhost;"
-        "DATABASE=AI_Delivery_Advisor;"
-        "Trusted_Connection=yes;"
-        "TrustServerCertificate=yes;"
-    )
+    """
+    Connect to SQL Server using pyodbc (Windows) or pymssql (Linux/Cloud).
+    Falls back to pymssql on systems without ODBC drivers.
+    """
+    server = os.getenv("DB_SERVER", "localhost")
+    database = os.getenv("DB_NAME", "AI_Delivery_Advisor")
+    username = os.getenv("DB_USER")
+    password = os.getenv("DB_PASSWORD")
+    
+    # For SQL Server Authentication (cloud/production with username/password)
+    if username and password:
+        if USING_PYODBC:
+            try:
+                connection_string = (
+                    f"DRIVER={{ODBC Driver 17 for SQL Server}};"
+                    f"SERVER={server};"
+                    f"DATABASE={database};"
+                    f"UID={username};"
+                    f"PWD={password};"
+                    f"TrustServerCertificate=yes;"
+                )
+                return pyodbc.connect(connection_string)
+            except Exception:
+                # Fall back to pymssql if pyodbc fails (e.g., missing ODBC drivers on Linux)
+                pass
+        
+        # Use pymssql for Linux/Cloud environments
+        import pymssql
+        return pymssql.connect(
+            server=server,
+            user=username,
+            password=password,
+            database=database,
+            tds_version="7.2",
+            timeout=10
+        )
+    
+    # For Windows Authentication (local development only)
+    else:
+        if not USING_PYODBC:
+            raise RuntimeError(
+                "Windows Authentication requires pyodbc on Windows. "
+                "For cloud deployments, provide DB_USER and DB_PASSWORD environment variables."
+            )
+        
+        connection_string = (
+            f"DRIVER={{ODBC Driver 18 for SQL Server}};"
+            f"SERVER={server};"
+            f"DATABASE={database};"
+            f"Trusted_Connection=yes;"
+            f"TrustServerCertificate=yes;"
+        )
+        return pyodbc.connect(connection_string)
 
 
 # ==================================================

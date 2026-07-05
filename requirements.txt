@@ -1,0 +1,8 @@
+streamlit
+openai
+pyodbc
+pymssql
+pandas
+python-dotenv
+ollama
+plotly
