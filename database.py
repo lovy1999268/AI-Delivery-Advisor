@@ -1,9 +1,14 @@
 import pandas as pd
 import os
 import sys
-from dotenv import load_dotenv
 
-load_dotenv()
+# Load .env file if available (local development only)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    # dotenv not available on cloud - that's OK, use st.secrets instead
+    pass
 
 # Determine which driver to use based on platform
 # Use pymssql on Linux/Cloud (no ODBC drivers), pyodbc on Windows
