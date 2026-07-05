@@ -1,16 +1,185 @@
 import pandas as pd
-import os
-import sys
+import sqlite3
+from pathlib import Path
 
-# Load .env file if available (local development only)
+# ==================================================
+# DATABASE CONFIGURATION
+# ==================================================
+
+# Database file path - creates a 'data' directory in app root
+DB_DIR = Path(__file__).parent / "data"
+DB_DIR.mkdir(exist_ok=True)
+DB_FILE = DB_DIR / "ai_delivery_advisor.db"
+
+
+# ==================================================
+# DATABASE CONNECTION
+# ==================================================
+
+def get_connection():
+    """
+    Connect to SQLite database (works locally and on Streamlit Cloud)
+    """
+    try:
+        conn = sqlite3.connect(str(DB_FILE))
+        conn.row_factory = sqlite3.Row  # Return rows as dictionaries
+        return conn
+    except Exception as e:
+        raise RuntimeError(
+            f"SQLite connection failed: {str(e)}\n"
+            f"Database path: {DB_FILE}"
+        ) from e
+
+
+def init_database():
+    """Initialize database schema if tables don't exist"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Create tables
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS RequirementLibrary (
+            RequirementID INTEGER PRIMARY KEY AUTOINCREMENT,
+            RequirementTitle TEXT NOT NULL,
+            RequirementDescription TEXT,
+            Category TEXT,
+            Priority TEXT,
+            ProjectType TEXT,
+            CreatedDate TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS RecommendationHistory (
+            RecommendationID INTEGER PRIMARY KEY AUTOINCREMENT,
+            RequirementID INTEGER,
+            RecommendedWorkflow TEXT,
+            AutomationOpportunity TEXT,
+            RiskAssessment TEXT,
+            ValidationApproach TEXT,
+            CreatedDate TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (RequirementID) REFERENCES RequirementLibrary(RequirementID)
+        )
+    """)
+    
+    conn.commit()
+    conn.close()
+
+
+# Initialize database on import
 try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
+    init_database()
+except Exception:
     pass
 
-# Determine platform
-IS_WINDOWS = sys.platform.startswith('win')
+
+# ==================================================
+# REQUIREMENT OPERATIONS
+# ==================================================
+
+def save_requirement(title, description, category, priority, project_type):
+    """Save a new requirement to the database"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        INSERT INTO RequirementLibrary
+        (RequirementTitle, RequirementDescription, Category, Priority, ProjectType)
+        VALUES (?, ?, ?, ?, ?)
+    """, (title, description, category, priority, project_type))
+    
+    requirement_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    
+    return requirement_id
+
+
+def save_recommendation(requirement_id, workflow, automation, risk, validation):
+    """Save a recommendation for a requirement"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        INSERT INTO RecommendationHistory
+        (RequirementID, RecommendedWorkflow, AutomationOpportunity, RiskAssessment, ValidationApproach)
+        VALUES (?, ?, ?, ?, ?)
+    """, (requirement_id, workflow, automation, risk, validation))
+    
+    conn.commit()
+    conn.close()
+
+
+def get_recommendation_history():
+    """Fetch all recommendations from history"""
+    conn = get_connection()
+    
+    query = """
+        SELECT 
+            r.RecommendationID,
+            req.RequirementTitle,
+            r.RecommendedWorkflow,
+            r.AutomationOpportunity,
+            r.RiskAssessment,
+            r.ValidationApproach,
+            r.CreatedDate
+        FROM RecommendationHistory r
+        LEFT JOIN RequirementLibrary req ON r.RequirementID = req.RequirementID
+        ORDER BY r.CreatedDate DESC
+    """
+    
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+    
+    return df
+
+
+def get_workflow(category):
+    """Get workflow recommendation for a category"""
+    workflows = {
+        "AI/ML": "Implement MLOps pipeline with automated model training",
+        "Cloud": "Migrate to cloud-native architecture with containerization",
+        "Integration": "Use API-first integration strategy",
+        "Security": "Implement zero-trust security model",
+        "Data": "Build data lake with governance framework"
+    }
+    return workflows.get(category, "Custom workflow required")
+
+
+def get_automation(category):
+    """Get automation opportunities for a category"""
+    automations = {
+        "AI/ML": "Automate model training, validation, and deployment",
+        "Cloud": "Automate infrastructure provisioning and scaling",
+        "Integration": "Automate API testing and monitoring",
+        "Security": "Automate compliance checking and threat detection",
+        "Data": "Automate data ingestion and quality checks"
+    }
+    return automations.get(category, "Opportunities vary by implementation")
+
+
+def get_risk(category):
+    """Get risk assessment for a category"""
+    risks = {
+        "AI/ML": "Model drift, data quality, algorithm bias",
+        "Cloud": "Vendor lock-in, cost overruns, compliance",
+        "Integration": "API versioning, downtime, security",
+        "Security": "Zero-day vulnerabilities, insider threats",
+        "Data": "Data leakage, integrity issues, privacy"
+    }
+    return risks.get(category, "Requires detailed risk analysis")
+
+
+def get_validation(category):
+    """Get validation approach for a category"""
+    validations = {
+        "AI/ML": "Cross-validation, A/B testing, performance monitoring",
+        "Cloud": "Load testing, chaos engineering, disaster recovery",
+        "Integration": "Contract testing, end-to-end testing",
+        "Security": "Penetration testing, security audit",
+        "Data": "Data profiling, quality checks, audit trails"
+    }
+    return validations.get(category, "Custom validation required")
 
 
 # ==================================================
