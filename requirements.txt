@@ -1,8 +1,8 @@
 streamlit
 openai
-pyodbc
-pymssql
+ollama
 pandas
 python-dotenv
-ollama
+pyodbc
+pymssql
 plotly
