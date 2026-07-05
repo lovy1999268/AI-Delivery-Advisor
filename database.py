@@ -7,50 +7,10 @@ try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
-    # dotenv not available on cloud - that's OK, use st.secrets instead
     pass
 
-# Determine which driver to use based on platform
-# Use pymssql on Linux/Cloud (no ODBC drivers), pyodbc on Windows
+# Determine platform
 IS_WINDOWS = sys.platform.startswith('win')
-
-if IS_WINDOWS:
-    try:
-        import pyodbc
-        USING_PYODBC = True
-    except ImportError:
-        USING_PYODBC = False
-        import pymssql
-else:
-    # Force pymssql on Linux/Cloud environments
-    USING_PYODBC = False
-    import pymssql
-
-# ==================================================
-# HELPER FUNCTIONS FOR CONFIGURATION
-# ==================================================
-
-def get_config(key, default=None):
-    """
-    Get configuration from multiple sources (in order of priority):
-    1. Streamlit secrets (st.secrets) - for cloud deployments
-    2. Environment variables (.env) - for local development
-    3. Default value
-    """
-    # Try Streamlit secrets first (available on Streamlit Cloud)
-    try:
-        import streamlit as st
-        if hasattr(st, 'secrets') and key in st.secrets:
-            return st.secrets[key]
-    except (ImportError, Exception):
-        pass
-    
-    # Fall back to environment variables
-    env_value = os.getenv(key)
-    if env_value is not None:
-        return env_value
-    
-    return default
 
 
 # ==================================================
@@ -59,77 +19,99 @@ def get_config(key, default=None):
 
 def get_connection():
     """
-    Connect to SQL Server using:
-    - pyodbc on Windows (with ODBC drivers)
-    - pymssql on Linux/Cloud (pure Python driver)
+    Connect to SQL Server with proper handling for:
+    - Local Windows: pyodbc + Windows Authentication
+    - Streamlit Cloud: pymssql + SQL Authentication
     
-    Configuration can come from:
-    - Streamlit Cloud secrets
-    - Local .env file
+    Reads config from:
+    1. Streamlit secrets (st.secrets) - for cloud
+    2. Environment variables (.env) - for local
     """
-    server = get_config("DB_SERVER", "localhost")
-    database = get_config("DB_NAME", "AI_Delivery_Advisor")
-    username = get_config("DB_USER")
-    password = get_config("DB_PASSWORD")
     
-    # For SQL Server Authentication (cloud/production with username/password)
-    if username and password:
-        if USING_PYODBC:
-            try:
-                connection_string = (
-                    f"DRIVER={{ODBC Driver 17 for SQL Server}};"
-                    f"SERVER={server};"
-                    f"DATABASE={database};"
-                    f"UID={username};"
-                    f"PWD={password};"
-                    f"TrustServerCertificate=yes;"
-                )
-                return pyodbc.connect(connection_string)
-            except Exception as e:
-                raise RuntimeError(
-                    f"pyodbc connection failed: {str(e)}. "
-                    "This usually means ODBC drivers are not installed. "
-                    "On Windows, install 'ODBC Driver 17 for SQL Server'. "
-                    "On Linux/Cloud, ensure DB_SERVER uses format: server.database.windows.net"
-                ) from e
-        else:
-            # Use pymssql for Linux/Cloud environments
-            try:
-                return pymssql.connect(
-                    server=server,
-                    user=username,
-                    password=password,
-                    database=database,
-                    tds_version="7.2",
-                    timeout=10
-                )
-            except Exception as e:
-                raise RuntimeError(
-                    f"pymssql connection failed: {str(e)}. "
-                    "Check that DB_SERVER, DB_USER, and DB_PASSWORD are correctly configured in Streamlit Secrets. "
-                    f"Verify server format: 'server.database.windows.net' for Azure SQL or 'hostname:port' for on-premises"
-                ) from e
+    # Get database credentials
+    server = os.getenv("DB_SERVER")
+    database = os.getenv("DB_NAME", "AI_Delivery_Advisor")
+    username = os.getenv("DB_USER", "").strip()
+    password = os.getenv("DB_PASSWORD", "").strip()
     
-    # For Windows Authentication (local development only)
-    else:
-        if not USING_PYODBC:
-            raise RuntimeError(
-                "Windows Authentication requires pyodbc on Windows. "
-                "For cloud deployments (Linux/Streamlit Cloud), you MUST provide DB_USER and DB_PASSWORD in Streamlit Secrets. "
-                "Steps: 1) Go to your Streamlit Cloud app settings. 2) Click 'Secrets'. 3) Add DB_USER, DB_PASSWORD, DB_SERVER."
-            )
+    # Try Streamlit secrets (overrides .env)
+    try:
+        import streamlit as st
+        if hasattr(st, 'secrets') and st.secrets:
+            server = st.secrets.get("DB_SERVER", server)
+            database = st.secrets.get("DB_NAME", database)
+            username = st.secrets.get("DB_USER", username)
+            password = st.secrets.get("DB_PASSWORD", password)
+    except (ImportError, Exception):
+        pass
+    
+    # Validate server is set
+    if not server:
+        raise ValueError(
+            "DB_SERVER not configured. "
+            "Set DB_SERVER in .env (local) or Streamlit Secrets (cloud)"
+        )
+    
+    # ===== LOCAL DEVELOPMENT (Windows + pyodbc) =====
+    if IS_WINDOWS and not (username and password):
+        try:
+            import pyodbc
+        except ImportError:
+            raise ImportError("pyodbc not installed. Run: pip install pyodbc")
         
         try:
-            connection_string = (
-                f"DRIVER={{ODBC Driver 18 for SQL Server}};"
+            conn_str = (
+                f"DRIVER={{ODBC Driver 17 for SQL Server}};"
                 f"SERVER={server};"
                 f"DATABASE={database};"
                 f"Trusted_Connection=yes;"
                 f"TrustServerCertificate=yes;"
             )
-            return pyodbc.connect(connection_string)
+            conn = pyodbc.connect(conn_str)
+            return conn
         except Exception as e:
-            raise RuntimeError(f"pyodbc connection with Windows auth failed: {str(e)}") from e
+            raise RuntimeError(
+                f"Local connection failed: {str(e)}\n"
+                f"Server: {server}\n"
+                f"Database: {database}\n"
+                f"Make sure SQL Server is running: Services > SQL Server (MSSQLSERVER)"
+            ) from e
+    
+    # ===== CLOUD DEPLOYMENT (any OS + pymssql with SQL Auth) =====
+    elif username and password:
+        try:
+            import pymssql
+        except ImportError:
+            raise ImportError("pymssql not installed. Run: pip install pymssql")
+        
+        try:
+            conn = pymssql.connect(
+                server=server,
+                user=username,
+                password=password,
+                database=database,
+                tds_version="7.2",
+                timeout=10
+            )
+            return conn
+        except Exception as e:
+            raise RuntimeError(
+                f"Cloud connection failed: {str(e)}\n"
+                f"Server: {server}\n"
+                f"User: {username}\n"
+                f"Database: {database}\n"
+                f"Check DB_SERVER, DB_USER, DB_PASSWORD in Streamlit Secrets"
+            ) from e
+    
+    # ===== ERROR: No credentials provided =====
+    else:
+        raise ValueError(
+            "Database credentials not configured!\n\n"
+            "For LOCAL development: "
+            "Set DB_SERVER in .env (leave DB_USER and DB_PASSWORD empty)\n\n"
+            "For STREAMLIT CLOUD: "
+            "Set DB_SERVER, DB_USER, and DB_PASSWORD in Streamlit Secrets"
+        )
 
 
 # ==================================================
